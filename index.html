@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Goofy Cam</title>
+<meta name="theme-color" content="#101114">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+/* Layout: camera fills the screen; on phones the controls sit in a solid bottom panel over the camera,
+   on wide screens they move to a rail beside it. Style: Showpiece (dark, solid surfaces, no glow on text). */
+:root{
+  color-scheme:dark;
+  --bg:#101114;
+  --surface:#1B1D22;
+  --surface-2:#262930;
+  --line:#3A3E47;
+  --ink:#FFFFFF;
+  --ink-2:rgba(255,255,255,.86);
+  --ink-3:rgba(255,255,255,.72);
+  --accent:#FFC93C;       /* sunny yellow */
+  --accent-ink:#1A1400;
+  --rec:#FF4D6A;          /* recording status only */
+  --display:"Fredoka","Arial Rounded MT Bold","Trebuchet MS",sans-serif;
+  --text:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --r:18px; --r-s:12px;
+  --raise:inset 0 1px 0 rgba(255,255,255,.07),0 4px 10px -6px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--text);font-size:16px;overflow:hidden;
+  -webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+button{font:inherit;color:inherit;cursor:pointer;-webkit-touch-callout:none}
+button:focus-visible,.chip:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+.app{position:fixed;inset:0;display:grid;grid-template-columns:minmax(0,1fr)}
+.stage-wrap{position:relative;min-height:0;background:#000;overflow:hidden}
+#stage{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+
+/* top bar */
+.top{position:absolute;left:0;right:0;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
+  padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 0}
+.brand{font-family:var(--display);font-weight:700;font-size:20px;background:var(--surface);border:1px solid var(--line);
+  padding:6px 14px;border-radius:999px}
+.brand b{color:var(--accent)}
+.round{width:48px;height:48px;border-radius:50%;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;box-shadow:var(--raise)}
+.round svg{width:24px;height:24px}
+
+.rec{position:absolute;top:calc(env(safe-area-inset-top,0px) + 72px);left:50%;transform:translateX(-50%);z-index:5;
+  background:var(--rec);color:#fff;font-weight:700;font-variant-numeric:tabular-nums;padding:6px 14px;border-radius:999px;font-size:16px}
+.tip{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);z-index:4;background:var(--surface);border:1px solid var(--line);
+  color:var(--ink);font-weight:700;font-size:17px;padding:10px 18px;border-radius:var(--r-s);text-align:center;max-width:min(320px,86%)}
+.flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:6}
+.flash.go{animation:fl .35s ease-out}
+@keyframes fl{0%{opacity:.9}100%{opacity:0}}
+
+/* start card */
+.start{position:absolute;inset:0;z-index:8;display:grid;place-items:center;padding:16px;background:var(--bg)}
+.start-card{width:min(420px,100%);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:28px 22px;text-align:center;box-shadow:var(--raise)}
+.start-card h1{font-family:var(--display);font-size:40px;margin:6px 0 6px;letter-spacing:.5px}
+.start-card h1 b{color:var(--accent)}
+.start-card p{color:var(--ink-2);margin:0 0 20px;line-height:1.45}
+.start-card canvas{width:120px;height:120px}
+.big{width:100%;min-height:56px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:18px}
+.small-note{color:var(--ink-3);font-size:14px;margin-top:12px}
+
+/* control panel */
+.panel{position:absolute;left:0;right:0;bottom:0;z-index:5;background:var(--surface);border-top:1px solid var(--line);
+  border-radius:22px 22px 0 0;padding:12px 16px calc(env(safe-area-inset-bottom,0px) + 12px);display:flex;flex-direction:column;gap:12px}
+.tabs{display:flex;padding:3px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line)}
+.tabs button{flex:1;min-height:44px;border:0;border-radius:999px;background:transparent;color:var(--ink-2);font-weight:700;font-size:16px}
+.tabs button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.chips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px;min-width:0}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-width:76px;min-height:76px;
+  padding:6px 8px;border-radius:var(--r-s);border:2px solid var(--line);background:var(--surface-2);font-weight:700;font-size:14px;color:var(--ink)}
+.chip canvas{width:42px;height:42px}
+.chip .sym{font-family:var(--display);font-size:22px;line-height:1;color:var(--accent)}
+.chip[aria-pressed="true"]{border-color:var(--accent);background:#3A3220}
+.voice-row{display:flex;align-items:center;gap:10px;min-width:0}
+.voice-row .hear{min-height:44px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--surface-2);font-weight:700;font-size:15px;flex:0 0 auto}
+.voice-row span{color:var(--ink-3);font-size:14px;line-height:1.3;min-width:0}
+
+.shoot{display:grid;grid-template-columns:1fr auto 1fr;align-items:center}
+.mode{justify-self:start;display:flex;padding:3px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line)}
+.mode button{min-height:40px;padding:0 12px;border:0;border-radius:999px;background:transparent;color:var(--ink-2);font-weight:700;font-size:15px}
+.mode button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.shutter{width:76px;height:76px;border-radius:50%;border:5px solid var(--ink);background:var(--accent);padding:0;display:grid;place-items:center}
+.shutter.video{background:var(--rec)}
+.shutter.recording i{width:26px;height:26px;border-radius:6px;background:#fff;display:block}
+.thumb{justify-self:end;width:52px;height:52px;border-radius:12px;border:2px solid var(--line);background:var(--surface-2);overflow:hidden;padding:0}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+
+/* result sheet */
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.82);display:grid;place-items:center;padding:16px}
+.sheet-card{width:min(480px,100%);max-height:100%;display:flex;flex-direction:column;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.sheet-card .media{min-height:0;flex:1;display:grid;place-items:center;background:#000;border-radius:var(--r-s);overflow:hidden}
+.sheet-card img,.sheet-card video{max-width:100%;max-height:62dvh;display:block}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{min-height:52px;border-radius:14px;border:1px solid var(--line);background:var(--surface-2);font-weight:700;font-size:17px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border:0}
+.sheet-card .hint{color:var(--ink-3);font-size:14px;text-align:center;margin:0}
+
+@media (min-width:900px){
+  .app{grid-template-columns:minmax(0,1fr) 380px}
+  .panel{position:static;border-radius:0;border-top:0;border-left:1px solid var(--line);padding:20px;gap:16px;overflow:auto}
+  .chips{flex-wrap:wrap;overflow:visible}
+  .shoot{margin-top:auto}
+  #stage{object-fit:contain}
+}
+@media (prefers-reduced-motion:reduce){.flash.go{animation:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage-wrap" id="stageWrap">
+    <canvas id="stage"></canvas>
+    <div class="top">
+      <div class="brand">Goofy <b>Cam</b></div>
+      <button class="round" id="flipBtn" aria-label="Switch camera">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><path d="M9 13a3 3 0 0 1 5.6-1.5M15 13a3 3 0 0 1-5.6 1.5"/><path d="M14.6 9.6v2h-2M9.4 16.4v-2h2"/></svg>
+      </button>
+    </div>
+    <div class="rec" id="recBadge" hidden>● REC <span id="recTime">0:00</span></div>
+    <div class="tip" id="tip" hidden></div>
+    <div class="flash" id="flash"></div>
+    <div class="start" id="start">
+      <div class="start-card">
+        <canvas id="logoFace" width="240" height="240"></canvas>
+        <h1>Goofy <b>Cam</b></h1>
+        <p>Silly faces, big eyes, face swaps and funny voices. Take a picture or a video and send it to the family.</p>
+        <button class="big" id="startBtn">Start the camera</button>
+        <div class="small-note" id="startNote">Your pictures stay on your phone.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel">
+    <div class="tabs" role="group" aria-label="Filter type">
+      <button data-tab="stickers" aria-pressed="true">Stickers</button>
+      <button data-tab="warps" aria-pressed="false">Warps</button>
+      <button data-tab="swap" aria-pressed="false">Swap</button>
+      <button data-tab="voice" aria-pressed="false">Voice</button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="voice-row" id="voiceRow" hidden>
+      <button class="hear" id="hearBtn">Try it</button>
+      <span id="hearNote">Talk for 3 seconds and hear it back. The voice is used when you record a video.</span>
+    </div>
+    <div class="shoot">
+      <div class="mode" role="group" aria-label="Photo or video">
+        <button data-mode="photo" aria-pressed="true">Photo</button>
+        <button data-mode="video" aria-pressed="false">Video</button>
+      </div>
+      <button class="shutter" id="shutter" aria-label="Take picture"><i></i></button>
+      <button class="thumb" id="thumb" aria-label="Last capture" hidden><img id="thumbImg" alt=""></button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="photoPick" accept="image/*" hidden>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card">
+    <div class="media" id="sheetMedia"></div>
+    <div class="row">
+      <button class="btn primary" id="shareBtn">Share</button>
+      <button class="btn" id="saveBtn">Save</button>
+    </div>
+    <button class="btn" id="closeBtn">Back to camera</button>
+    <p class="hint" id="sheetHint">Share lets you text it or save it to your Gallery.</p>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, FaceLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+const $ = s => document.querySelector(s);
+const stage = $("#stage"), sctx = stage.getContext("2d");
+const video = document.createElement("video");
+video.playsInline = true; video.muted = true; video.setAttribute("playsinline", "");
+
+let landmarker = null, imageLandmarker = null;
+let facing = "user", mirror = true, camStream = null;
+let W = 720, H = 1280;
+let tab = "stickers", active = { stickers: "none", warps: "none", swap: "none" }, voice = "normal";
+let captureMode = "photo";
+let faces = [];            // smoothed faces for this frame
+let swapPhoto = null;      // {img, pts}
+let lastBlob = null, lastKind = "image";
+
+/* ---------- face landmark helpers ---------- */
+const OVAL = [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function buildFace(pts, jaw) {
+  const e1 = mid(pts[33], pts[133]), e2 = mid(pts[362], pts[263]);
+  const [eL, eR] = e1.x < e2.x ? [e1, e2] : [e2, e1];        // screen left / right
+  const c = mid(eL, eR), ed = dist(eL, eR), ang = Math.atan2(eR.y - eL.y, eR.x - eL.x);
+  const cos = Math.cos(-ang), sin = Math.sin(-ang), k = 100 / ed;
+  const L = i => { const p = pts[i], dx = p.x - c.x, dy = p.y - c.y; return { x: (dx * cos - dy * sin) * k, y: (dx * sin + dy * cos) * k }; };
+  const mouth = mid(pts[13], pts[14]);
+  return { pts, eL, eR, c, ed, ang, L, mouth, jaw, nose: pts[1],
+    faceW: dist(pts[234], pts[454]), faceH: dist(pts[10], pts[152]), center: mid(pts[10], pts[152]) };
+}
+
+let smooth = [];
+function toScreen(result) {
+  const list = result.faceLandmarks || [];
+  if (list.length !== smooth.length) smooth = [];
+  const out = list.map((lm, fi) => {
+    const pts = lm.map(p => ({ x: (mirror ? 1 - p.x : p.x) * W, y: p.y * H }));
+    const prev = smooth[fi];
+    if (prev) for (let i = 0; i < pts.length; i++) { pts[i].x = prev[i].x * 0.45 + pts[i].x * 0.55; pts[i].y = prev[i].y * 0.45 + pts[i].y * 0.55; }
+    smooth[fi] = pts;
+    const bs = result.faceBlendshapes?.[fi]?.categories || [];
+    const jaw = bs.find(b => b.categoryName === "jawOpen")?.score || 0;
+    return buildFace(pts, jaw);
+  });
+  return out.sort((a, b) => a.c.x - b.c.x);
+}
+
+/* ---------- WebGL warp ---------- */
+const glc = document.createElement("canvas");
+const gl = glc.getContext("webgl", { premultipliedAlpha: false });
+let prog, tex, uRes, uMirror, uN, uW, uK;
+if (gl) {
+  const vs = `attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
+  const fs = `precision highp float;uniform sampler2D tex;uniform vec2 res;uniform float mirror;uniform int n;uniform vec4 w[8];uniform vec2 k[8];
+  void main(){vec2 q=vec2(gl_FragCoord.x,res.y-gl_FragCoord.y);
+   for(int i=0;i<8;i++){if(i>=n)break;vec2 c=w[i].xy;float r=w[i].z;vec2 d=q-c;float dl=length(d);
+    if(dl<r){float t=dl/r;float s=(1.-t)*(1.-t);q=c+d*(vec2(1.)-k[i]*s);}}
+   vec2 uv=q/res;if(mirror>.5)uv.x=1.-uv.x;gl_FragColor=texture2D(tex,uv);}`;
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); return o; };
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog); gl.useProgram(prog);
+  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tex);
+  [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T].forEach(p => gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE));
+  [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER].forEach(p => gl.texParameteri(gl.TEXTURE_2D, p, gl.LINEAR));
+  uRes = gl.getUniformLocation(prog, "res"); uMirror = gl.getUniformLocation(prog, "mirror"); uN = gl.getUniformLocation(prog, "n");
+  uW = gl.getUniformLocation(prog, "w"); uK = gl.getUniformLocation(prog, "k");
+}
+
+const WARPS = {
+  bigeyes:  { label: "Big Eyes",  sym: "◉◉", fn: f => [w(f.eL, f.ed * .85, .55), w(f.eR, f.ed * .85, .55)] },
+  bobble:   { label: "Bobble Head", sym: "◯", fn: f => [w(f.center, f.faceH * 1.05, .5)] },
+  tiny:     { label: "Tiny Head", sym: "·", fn: f => [w(f.center, f.faceH * 1.15, -.55)] },
+  bigmouth: { label: "Big Mouth", sym: "◡", fn: f => [w(f.mouth, f.ed * 1.05, .6)] },
+  bignose:  { label: "Big Nose",  sym: "▲", fn: f => [w(f.nose, f.ed * .8, .65), w(f.eL, f.ed * .6, -.45), w(f.eR, f.ed * .6, -.45)] },
+  alien:    { label: "Alien",     sym: "◖◗", fn: f => [w(f.eL, f.ed * .95, .65), w(f.eR, f.ed * .95, .65), w(f.mouth, f.ed * .8, -.55), w(f.pts[152], f.ed * 1.1, -.4)] },
+  stretch:  { label: "Long Face", sym: "↕", fn: f => [w(f.center, f.faceH * 1.1, -.25, .4)] },
+  squish:   { label: "Squish",    sym: "↔", fn: f => [w(f.center, f.faceH * 1.1, .35, -.35)] },
+};
+function w(c, r, kx, ky = kx) { return { c, r, kx, ky }; }
+
+function renderWarp(list) {
+  if (glc.width !== W || glc.height !== H) { glc.width = W; glc.height = H; gl.viewport(0, 0, W, H); }
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+  const ws = new Float32Array(32), ks = new Float32Array(16), n = Math.min(8, list.length);
+  for (let i = 0; i < n; i++) { const o = list[i]; ws.set([o.c.x, o.c.y, o.r, 0], i * 4); ks.set([o.kx, o.ky], i * 2); }
+  gl.uniform2f(uRes, W, H); gl.uniform1f(uMirror, mirror ? 1 : 0); gl.uniform1i(uN, n);
+  gl.uniform4fv(uW, ws); gl.uniform2fv(uK, ks);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+/* ---------- stickers (drawn in a face frame: eyes at (-50,0) and (50,0)) ---------- */
+const INK = "#141414";
+function frame(ctx, f, draw) {
+  ctx.save(); ctx.translate(f.c.x, f.c.y); ctx.rotate(f.ang); const s = f.ed / 100; ctx.scale(s, s);
+  ctx.lineJoin = "round"; ctx.lineCap = "round"; draw(ctx, f); ctx.restore();
+}
+function blob(ctx, fill, stroke = INK, lw = 4) { ctx.fillStyle = fill; ctx.fill(); if (stroke) { ctx.lineWidth = lw; ctx.strokeStyle = stroke; ctx.stroke(); } }
+function circle(ctx, x, y, r, fill, stroke, lw) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); blob(ctx, fill, stroke, lw); }
+function ell(ctx, x, y, rx, ry, rot, fill, stroke, lw) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); blob(ctx, fill, stroke, lw); }
+
+const STICKERS = {
+  shades: { label: "Cool Shades", draw(c, f) {
+    const hw = f.L(454).x, hw2 = f.L(234).x;
+    c.lineWidth = 7; c.strokeStyle = INK;
+    c.beginPath(); c.moveTo(-88, -10); c.lineTo(hw2, -16); c.moveTo(88, -10); c.lineTo(hw, -16); c.stroke();
+    [-50, 50].forEach(x => { c.beginPath(); c.roundRect(x - 40, -26, 80, 52, 20); blob(c, "#0c0c0f", INK, 6); });
+    c.beginPath(); c.moveTo(-12, -8); c.quadraticCurveTo(0, -18, 12, -8); c.lineWidth = 7; c.stroke();
+    c.strokeStyle = "rgba(255,255,255,.75)"; c.lineWidth = 5;
+    [-50, 50].forEach(x => { c.beginPath(); c.moveTo(x - 22, -10); c.lineTo(x - 8, -18); c.stroke(); });
+  }},
+  gent: { label: "Gentleman", draw(c, f) {
+    const p = mid(f.L(2), f.L(0)), top = f.L(10), hw = Math.abs(f.L(454).x - f.L(234).x);
+    // mustache
+    c.save(); c.translate(p.x, p.y + 2); c.beginPath();
+    c.moveTo(0, -4);
+    c.bezierCurveTo(-20, -18, -48, -10, -58, 6); c.bezierCurveTo(-66, 20, -86, 16, -88, 0);
+    c.bezierCurveTo(-84, 22, -58, 30, -38, 16); c.bezierCurveTo(-24, 8, -10, 10, 0, 14);
+    c.bezierCurveTo(10, 10, 24, 8, 38, 16); c.bezierCurveTo(58, 30, 84, 22, 88, 0);
+    c.bezierCurveTo(86, 16, 66, 20, 58, 6); c.bezierCurveTo(48, -10, 20, -18, 0, -4);
+    blob(c, "#3a2414", INK, 4); c.restore();
+    // monocle on the right eye
+    circle(c, 50, 0, 36, "rgba(200,230,255,.18)", "#D9A520", 7);
+    c.beginPath(); c.moveTo(50, 36); c.bezierCurveTo(56, 90, 80, 110, 70, 160); c.lineWidth = 3; c.strokeStyle = "#D9A520"; c.stroke();
+    // top hat
+    const by = top.y + 6, bw = hw * .62;
+    c.beginPath(); c.roundRect(-bw * .62, by - 150, bw * 1.24, 150, 10); blob(c, "#17171b", INK, 5);
+    c.beginPath(); c.rect(-bw * .62, by - 52, bw * 1.24, 26); blob(c, "#B3263A", null);
+    c.beginPath(); c.ellipse(0, by, bw, 18, 0, 0, Math.PI * 2); blob(c, "#17171b", INK, 5);
+  }},
+  puppy: { label: "Puppy", draw(c, f) {
+    const top = f.L(10), hw = Math.abs(f.L(454).x - f.L(234).x) / 2, n = f.L(1), m = mid(f.L(13), f.L(14));
+    [-1, 1].forEach(s => {
+      c.save(); c.translate(s * hw * .78, top.y + 18); c.rotate(s * .45);
+      c.beginPath(); c.moveTo(0, -10); c.bezierCurveTo(s * 70, -20, s * 66, 120, s * 18, 130); c.bezierCurveTo(s * -18, 120, s * -24, 30, 0, -10);
+      blob(c, "#8B5A2B", INK, 5);
+      c.beginPath(); c.moveTo(s * 4, 10); c.bezierCurveTo(s * 44, 6, s * 40, 100, s * 16, 108); c.bezierCurveTo(s * -4, 100, s * -6, 40, s * 4, 10);
+      blob(c, "#D39B6A", null); c.restore();
+    });
+    if (f.jaw > .3) {
+      const len = 40 + f.jaw * 90;
+      c.beginPath(); c.roundRect(m.x - 22, m.y - 4, 44, len, [6, 6, 22, 22]); blob(c, "#FF6F8E", INK, 4);
+      c.beginPath(); c.moveTo(m.x, m.y + 6); c.lineTo(m.x, m.y + len * .6); c.lineWidth = 3; c.strokeStyle = "#C2405F"; c.stroke();
+    }
+    ell(c, n.x, n.y - 4, 26, 18, 0, "#121212", INK, 3);
+    ell(c, n.x - 8, n.y - 10, 7, 4, -.3, "#fff", null);
+    [-1, 1].forEach(s => [0, 12, 24].forEach((d, i) => circle(c, n.x + s * (34 + i * 8), n.y + 14 + (i === 1 ? -6 : 0), 3.2, "#2a1a10", null)));
+  }},
+  clown: { label: "Clown", draw(c, f) {
+    const top = f.L(10), hw = Math.abs(f.L(454).x - f.L(234).x) / 2, n = f.L(1);
+    const colors = ["#FF4D6A", "#FFC93C", "#3FD07A", "#3FA9FF", "#B983FF"];
+    [-1, 1].forEach(s => { for (let i = 0; i < 7; i++) circle(c, s * (hw * .8 + (i % 3) * 22), top.y + 24 + Math.floor(i / 2) * 22 - 20, 22, colors[i % 5], INK, 3); });
+    [-1, 1].forEach(s => circle(c, s * hw * .55, n.y + 14, 22, "rgba(255,90,120,.55)", null));
+    circle(c, n.x, n.y - 2, 24, "#E8232F", INK, 4); circle(c, n.x - 8, n.y - 10, 6, "#fff", null);
+  }},
+  crown: { label: "King", draw(c, f) {
+    const top = f.L(10), hw = Math.abs(f.L(454).x - f.L(234).x) / 2, by = top.y + 4, cw = hw * .85;
+    c.beginPath(); c.moveTo(-cw, by); c.lineTo(-cw, by - 70);
+    for (let i = 0; i < 4; i++) { const x0 = -cw + (i + .5) * (cw / 2); c.lineTo(x0, by - 34); c.lineTo(-cw + (i + 1) * (cw / 2), by - 70 - (i === 1 || i === 2 ? 14 : 0)); }
+    c.lineTo(cw, by); c.closePath(); blob(c, "#F2C230", INK, 5);
+    c.beginPath(); c.rect(-cw, by - 18, cw * 2, 18); blob(c, "#D9A520", INK, 4);
+    [-cw * .5, 0, cw * .5].forEach((x, i) => circle(c, x, by - 9, 7, ["#E8232F", "#2F7BFF", "#2FCB6A"][i], INK, 2));
+    [-cw, -cw / 2, 0, cw / 2, cw].forEach((x, i) => circle(c, x, by - 70 - (i === 1 || i === 3 ? 14 : 0), 8, "#fff", INK, 3));
+  }},
+  pirate: { label: "Pirate", draw(c, f) {
+    const top = f.L(10), hw = Math.abs(f.L(454).x - f.L(234).x) / 2;
+    c.beginPath(); c.moveTo(-hw * 1.02, top.y + 60); c.quadraticCurveTo(-hw, top.y - 40, 0, top.y - 46);
+    c.quadraticCurveTo(hw, top.y - 40, hw * 1.02, top.y + 60); c.quadraticCurveTo(0, top.y + 8, -hw * 1.02, top.y + 60);
+    blob(c, "#C8202E", INK, 5);
+    for (let i = 0; i < 6; i++) circle(c, -hw * .7 + i * hw * .28, top.y - 8 + (i % 2) * 18, 6, "#fff", null);
+    c.beginPath(); c.moveTo(hw * 1.02, top.y + 50); c.lineTo(hw * 1.3, top.y + 90); c.lineTo(hw * 1.15, top.y + 40); blob(c, "#C8202E", INK, 4);
+    c.lineWidth = 6; c.strokeStyle = INK; c.beginPath(); c.moveTo(-hw, -34); c.lineTo(hw, 22); c.stroke();
+    ell(c, 50, 4, 38, 30, .15, "#111", INK, 4);
+  }},
+  bunny: { label: "Bunny", draw(c, f) {
+    const top = f.L(10), n = f.L(1), lip = f.L(13);
+    [-1, 1].forEach(s => { ell(c, s * 34, top.y - 80, 26, 92, s * .18, "#fff", INK, 5); ell(c, s * 34, top.y - 74, 13, 66, s * .18, "#FFB3C6", null); });
+    c.beginPath(); c.moveTo(n.x - 12, n.y - 6); c.lineTo(n.x + 12, n.y - 6); c.lineTo(n.x, n.y + 6); c.closePath(); blob(c, "#FF8FAE", INK, 3);
+    c.strokeStyle = INK; c.lineWidth = 3;
+    [-1, 1].forEach(s => [-8, 2, 12].forEach(d => { c.beginPath(); c.moveTo(n.x + s * 22, n.y + 8); c.lineTo(n.x + s * 78, n.y + d * 1.6); c.stroke(); }));
+    if (f.jaw > .12) [-1, 1].forEach(s => { c.beginPath(); c.roundRect(lip.x + (s < 0 ? -17 : 1), lip.y - 2, 16, 22, 3); blob(c, "#fff", INK, 3); });
+  }},
+  googly: { label: "Googly Eyes", draw: null },   // drawn in screen space with wobble
+};
+
+const googlyState = new Map();
+function drawGoogly(ctx, f, fi) {
+  const R = f.ed * .46, r = R * .45;
+  const st = googlyState.get(fi) || { p: [{ ...f.eL }, { ...f.eR }], v: [{ x: 0, y: 0 }, { x: 0, y: 0 }] };
+  [f.eL, f.eR].forEach((e, i) => {
+    const p = st.p[i], v = st.v[i];
+    v.y += R * .035; v.x *= .88; v.y *= .88;            // gravity + damping
+    p.x += v.x; p.y += v.y;
+    const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy), lim = R - r - 2;
+    if (d > lim) { p.x = e.x + dx / d * lim; p.y = e.y + dy / d * lim; v.x *= -.4; v.y *= -.4; }
+    circle(ctx, e.x, e.y, R, "#fff", INK, Math.max(3, R * .08));
+    circle(ctx, p.x, p.y, r, "#111", null);
+    circle(ctx, p.x - r * .35, p.y - r * .35, r * .22, "#fff", null);
+  });
+  googlyState.set(fi, st);
+}
+
+/* ---------- face swap ---------- */
+const srcC = document.createElement("canvas"), srcX = srcC.getContext("2d");
+const tmpC = document.createElement("canvas"), tmpX = tmpC.getContext("2d");
+const maskC = document.createElement("canvas"), maskX = maskC.getContext("2d");
+function affine(s, d) {   // three point pairs -> [a,b,c,d,e,f]
+  const [s0, s1, s2] = s, [d0, d1, d2] = d;
+  const det = s0.x * (s1.y - s2.y) - s0.y * (s1.x - s2.x) + (s1.x * s2.y - s2.x * s1.y);
+  const solve = (v0, v1, v2) => [
+    (v0 * (s1.y - s2.y) - s0.y * (v1 - v2) + (v1 * s2.y - v2 * s1.y)) / det,
+    (s0.x * (v1 - v2) - v0 * (s1.x - s2.x) + (s1.x * v2 - s2.x * v1)) / det,
+    (s0.x * (s1.y * v2 - s2.y * v1) - s0.y * (s1.x * v2 - s2.x * v1) + v0 * (s1.x * s2.y - s2.x * s1.y)) / det];
+  const [a, c, e] = solve(d0.x, d1.x, d2.x), [b, dd, f] = solve(d0.y, d1.y, d2.y);
+  return [a, b, c, dd, e, f];
+}
+function keyPts(pts) { return [mid(pts[33], pts[133]), mid(pts[362], pts[263]), mid(pts[13], pts[14])]; }
+function pasteFace(srcImg, srcPts, target) {
+  for (const cv of [tmpC, maskC]) if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const m = affine(keyPts(srcPts), keyPts(target.pts));
+  tmpX.setTransform(1, 0, 0, 1, 0, 0); tmpX.globalCompositeOperation = "source-over"; tmpX.clearRect(0, 0, W, H);
+  tmpX.setTransform(...m); tmpX.drawImage(srcImg, 0, 0); tmpX.setTransform(1, 0, 0, 1, 0, 0);
+  maskX.clearRect(0, 0, W, H); maskX.filter = `blur(${Math.max(4, target.ed * .14)}px)`;
+  maskX.beginPath();
+  const cx = target.center.x, cy = target.center.y;
+  OVAL.forEach((i, j) => { const p = target.pts[i], x = cx + (p.x - cx) * .9, y = cy + (p.y - cy) * .9; j ? maskX.lineTo(x, y) : maskX.moveTo(x, y); });
+  maskX.closePath(); maskX.fillStyle = "#fff"; maskX.fill(); maskX.filter = "none";
+  tmpX.globalCompositeOperation = "destination-in"; tmpX.drawImage(maskC, 0, 0); tmpX.globalCompositeOperation = "source-over";
+  sctx.drawImage(tmpC, 0, 0);
+}
+
+/* ---------- main loop ---------- */
+let lastTs = -1, running = false;
+function setTip(t) { const el = $("#tip"); if (!t) { el.hidden = true; return; } el.textContent = t; el.hidden = false; }
+
+function loop() {
+  if (!running) return;
+  if (video.readyState >= 2 && landmarker) {
+    if (video.videoWidth && (video.videoWidth !== W || video.videoHeight !== H)) { W = video.videoWidth; H = video.videoHeight; smooth = []; }
+    if (stage.width !== W || stage.height !== H) { stage.width = W; stage.height = H; }
+    const now = performance.now(); if (now <= lastTs) { requestAnimationFrame(loop); return; } lastTs = now;
+    let res; try { res = landmarker.detectForVideo(video, now); } catch (e) { res = {}; }
+    faces = toScreen(res);
+    const current = currentFilter();
+    // base layer
+    if (current.kind === "warps" && current.id !== "none" && gl && faces.length) {
+      renderWarp(faces.flatMap(f => WARPS[current.id].fn(f))); sctx.drawImage(glc, 0, 0);
+    } else {
+      sctx.save(); if (mirror) { sctx.translate(W, 0); sctx.scale(-1, 1); } sctx.drawImage(video, 0, 0, W, H); sctx.restore();
+    }
+    // swap
+    let tip = "";
+    if (current.kind === "swap" && current.id === "pair") {
+      if (faces.length >= 2) {
+        if (srcC.width !== W || srcC.height !== H) { srcC.width = W; srcC.height = H; }
+        srcX.drawImage(stage, 0, 0);
+        const [a, b] = faces; pasteFace(srcC, a.pts, b); pasteFace(srcC, b.pts, a);
+      } else tip = "Get two faces in the picture";
+    } else if (current.kind === "swap" && current.id === "photo") {
+      if (!swapPhoto) tip = "Tap “Swap with a photo” to pick a picture";
+      else if (faces.length) faces.forEach(f => pasteFace(swapPhoto.img, swapPhoto.pts, f));
+    }
+    // stickers
+    if (current.kind === "stickers" && current.id !== "none") {
+      faces.forEach((f, i) => current.id === "googly" ? drawGoogly(sctx, f, i) : frame(sctx, f, STICKERS[current.id].draw));
+    }
+    if (!tip && !faces.length && current.id !== "none") tip = "Point the camera at a face";
+    setTip(tip);
+  }
+  requestAnimationFrame(loop);
+}
+function currentFilter() {
+  const kind = tab === "voice" ? lastVisualTab : tab;
+  return { kind, id: active[kind] };
+}
+let lastVisualTab = "stickers";
+
+/* ---------- camera ---------- */
+async function startCamera() {
+  camStream?.getVideoTracks().forEach(t => t.stop());
+  camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: innerHeight > innerWidth ? 720 : 1280 }, height: { ideal: innerHeight > innerWidth ? 1280 : 720 } }, audio: false });
+  mirror = facing === "user";
+  video.srcObject = camStream; await video.play();
+  W = video.videoWidth || 720; H = video.videoHeight || 1280; smooth = []; googlyState.clear();
+}
+$("#flipBtn").onclick = async () => { facing = facing === "user" ? "environment" : "user"; try { await startCamera(); } catch (e) { facing = "user"; await startCamera(); } };
+
+$("#startBtn").onclick = async () => {
+  const btn = $("#startBtn"), note = $("#startNote");
+  btn.disabled = true; btn.textContent = "Starting…";
+  try { await startCamera(); }
+  catch (e) { btn.disabled = false; btn.textContent = "Try again"; note.textContent = "The camera is blocked. Allow camera access for this site in your browser settings."; return; }
+  note.textContent = "Loading the face finder (first time takes a few seconds)…";
+  try {
+    const fs = await FilesetResolver.forVisionTasks(WASM);
+    const opts = d => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: "VIDEO", numFaces: 3, outputFaceBlendshapes: true });
+    try { landmarker = await FaceLandmarker.createFromOptions(fs, opts("GPU")); }
+    catch (e) { landmarker = await FaceLandmarker.createFromOptions(fs, opts("CPU")); }
+    window._fs = fs;
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Try again"; note.textContent = "Couldn't load the face finder. Check your signal and try again."; return;
+  }
+  $("#start").hidden = true; running = true; requestAnimationFrame(loop);
+};
+
+/* ---------- filter chips ---------- */
+const SWAPS = { pair: { label: "Swap 2 Faces", sym: "⇄" }, photo: { label: "Swap with a Photo", sym: "▣" } };
+const VOICES = {
+  normal: { label: "Normal", sym: "—" }, chipmunk: { label: "Chipmunk", sym: "↑" }, deep: { label: "Deep", sym: "↓" },
+  robot: { label: "Robot", sym: "≋" }, alien: { label: "Alien", sym: "∿" }, echo: { label: "Echo", sym: "))" } };
+
+function previewFace(cv, id) {     // little cartoon face wearing the sticker
+  const x = cv.getContext("2d"), s = cv.width; x.clearRect(0, 0, s, s);
+  const pts = [];
+  const set = (i, px, py) => pts[i] = { x: px * s, y: py * s };
+  set(33, .30, .45); set(133, .44, .45); set(362, .56, .45); set(263, .70, .45);
+  set(1, .5, .58); set(2, .5, .63); set(0, .5, .67); set(13, .5, .72); set(14, .5, .74);
+  set(10, .5, .26); set(152, .5, .9); set(234, .2, .55); set(454, .8, .55);
+  x.save(); x.translate(s * .5, s * .56); x.scale(.76, .76); x.translate(-s * .5, -s * .58);
+  circle(x, s * .5, s * .58, s * .33, "#F2C9A0", INK, s * .025);
+  const f = buildFace(pts, id === "puppy" ? .6 : 0);
+  if (id === "googly") { drawGoogly(x, f, "preview"); googlyState.delete("preview"); }
+  else { if (id !== "shades") { circle(x, f.eL.x, f.eL.y, s * .03, INK); circle(x, f.eR.x, f.eR.y, s * .03, INK); }
+         frame(x, f, STICKERS[id].draw); }
+  x.restore();
+}
+
+function renderChips() {
+  const box = $("#chips"); box.innerHTML = "";
+  $("#voiceRow").hidden = tab !== "voice";
+  let items;
+  if (tab === "stickers") items = { none: { label: "None", sym: "○" }, ...STICKERS };
+  else if (tab === "warps") items = { none: { label: "None", sym: "○" }, ...WARPS };
+  else if (tab === "swap") items = { none: { label: "None", sym: "○" }, ...SWAPS };
+  else items = VOICES;
+  const cur = tab === "voice" ? voice : active[tab];
+  for (const [id, it] of Object.entries(items)) {
+    const b = document.createElement("button"); b.className = "chip"; b.setAttribute("aria-pressed", id === cur);
+    if (tab === "stickers" && id !== "none") { const cv = document.createElement("canvas"); cv.width = cv.height = 96; previewFace(cv, id); b.append(cv); }
+    else { const sy = document.createElement("span"); sy.className = "sym"; sy.textContent = it.sym; b.append(sy); }
+    const lb = document.createElement("span"); lb.textContent = it.label; b.append(lb);
+    b.onclick = () => pick(id);
+    box.append(b);
+  }
+}
+function pick(id) {
+  if (tab === "voice") { voice = id; applyVoice(); }
+  else {
+    for (const k of ["stickers", "warps", "swap"]) active[k] = "none";     // one look at a time
+    active[tab] = id; lastVisualTab = tab; googlyState.clear();
+    if (tab === "swap" && id === "photo") $("#photoPick").click();
+  }
+  renderChips();
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  if (tab !== "voice") lastVisualTab = tab;
+  renderChips();
+});
+
+/* photo for swap */
+$("#photoPick").onchange = async e => {
+  const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+  const img = new Image(); img.src = URL.createObjectURL(file); await img.decode();
+  try {
+    if (!imageLandmarker) imageLandmarker = await FaceLandmarker.createFromOptions(window._fs, {
+      baseOptions: { modelAssetPath: MODEL, delegate: "GPU" }, runningMode: "IMAGE", numFaces: 1 });
+    const r = imageLandmarker.detect(img);
+    if (!r.faceLandmarks?.length) { flashTip("No face found in that picture. Try another one."); return; }
+    swapPhoto = { img, pts: r.faceLandmarks[0].map(p => ({ x: p.x * img.naturalWidth, y: p.y * img.naturalHeight })) };
+  } catch (err) { flashTip("Couldn't read that picture."); }
+};
+function flashTip(t) { setTip(t); setTimeout(() => setTip(""), 2500); }
+
+/* ---------- voice ---------- */
+let actx = null, micStream = null, voiceDest = null, nodes = null;
+const WORKLET = `class P extends AudioWorkletProcessor{constructor(){super();this.N=8192;this.b=new Float32Array(this.N);this.w=0;this.ph=0;this.r=1;this.S=2048;
+this.port.onmessage=e=>{this.r=e.data}}
+read(d){let p=this.w-d;while(p<0)p+=this.N;const i=Math.floor(p),f=p-i,a=this.b[i%this.N],b=this.b[(i+1)%this.N];return a+(b-a)*f}
+process(ins,outs){const inp=ins[0]&&ins[0][0],out=outs[0];if(!inp){return true}const S=this.S,dp=(1-this.r)/S;
+for(let n=0;n<inp.length;n++){this.b[this.w]=inp[n];let y;
+if(this.r===1){y=inp[n]}else{this.ph+=dp;if(this.ph>=1)this.ph-=1;if(this.ph<0)this.ph+=1;const p2=(this.ph+.5)%1;
+const g1=Math.sin(Math.PI*this.ph)**2,g2=Math.sin(Math.PI*p2)**2;y=this.read(this.ph*S+4)*g1+this.read(p2*S+4)*g2}
+for(let c=0;c<out.length;c++)out[c][n]=y;this.w=(this.w+1)%this.N}return true}}
+registerProcessor("pitch-shift",P);`;
+
+async function ensureMic() {
+  if (micStream) return true;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { flashTip("The microphone is blocked, so videos will be silent."); return false; }
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" })));
+  const src = actx.createMediaStreamSource(micStream);
+  const ps = new AudioWorkletNode(actx, "pitch-shift");
+  const ring = actx.createGain(); const osc = actx.createOscillator(); osc.start();
+  const dry = actx.createGain(), wet = actx.createGain(), delay = actx.createDelay(1), fb = actx.createGain();
+  voiceDest = actx.createMediaStreamDestination();
+  src.connect(ps); ps.connect(ring); ring.connect(dry); ring.connect(delay); delay.connect(fb); fb.connect(delay); delay.connect(wet);
+  dry.connect(voiceDest); wet.connect(voiceDest);
+  nodes = { ps, ring, osc, dry, wet, delay, fb, ringOn: false };
+  applyVoice(); return true;
+}
+function applyVoice() {
+  if (!nodes) return;
+  const v = { normal: [1, 0, 0], chipmunk: [1.7, 0, 0], deep: [.62, 0, 0], robot: [1, 55, 0], alien: [1.35, 28, .25], echo: [1, 0, .55] }[voice];
+  const [ratio, ringHz, echo] = v;
+  nodes.ps.port.postMessage(ratio);
+  if (ringHz) { if (!nodes.ringOn) { nodes.osc.connect(nodes.ring.gain); nodes.ringOn = true; } nodes.ring.gain.value = 0; nodes.osc.frequency.value = ringHz; }
+  else { if (nodes.ringOn) { nodes.osc.disconnect(); nodes.ringOn = false; } nodes.ring.gain.value = 1; }
+  nodes.delay.delayTime.value = .28; nodes.fb.gain.value = echo ? .45 : 0; nodes.wet.gain.value = echo; nodes.dry.gain.value = 1;
+}
+function pickMime(list) { return list.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || ""; }
+
+$("#hearBtn").onclick = async () => {
+  const btn = $("#hearBtn"); if (btn.disabled) return;
+  if (!(await ensureMic())) return; await actx.resume();
+  btn.disabled = true; btn.textContent = "Talk now…";
+  const mime = pickMime(["audio/mp4", "audio/webm;codecs=opus", "audio/webm"]);
+  const rec = new MediaRecorder(voiceDest.stream, mime ? { mimeType: mime } : {}); const parts = [];
+  rec.ondataavailable = e => e.data.size && parts.push(e.data);
+  rec.onstop = () => { btn.textContent = "Playing…"; const a = new Audio(URL.createObjectURL(new Blob(parts, { type: rec.mimeType })));
+    a.onended = a.onerror = () => { btn.disabled = false; btn.textContent = "Try it"; }; a.play().catch(() => { btn.disabled = false; btn.textContent = "Try it"; }); };
+  rec.start(); setTimeout(() => rec.stop(), 3000);
+};
+
+/* ---------- capture ---------- */
+document.querySelectorAll(".mode button").forEach(b => b.onclick = async () => {
+  if (recorder) return;
+  captureMode = b.dataset.mode; document.querySelectorAll(".mode button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  $("#shutter").classList.toggle("video", captureMode === "video");
+  $("#shutter").setAttribute("aria-label", captureMode === "video" ? "Start recording" : "Take picture");
+  if (captureMode === "video") await ensureMic();
+});
+
+let recorder = null, recTimer = null, recStart = 0;
+$("#shutter").onclick = async () => {
+  if (!running) return;
+  if (captureMode === "photo") {
+    const fl = $("#flash"); fl.classList.remove("go"); void fl.offsetWidth; fl.classList.add("go");
+    stage.toBlob(b => showResult(b, "image"), "image/jpeg", .92);
+    return;
+  }
+  if (recorder) { recorder.stop(); return; }
+  const hasMic = await ensureMic(); if (actx) await actx.resume();
+  const tracks = [...stage.captureStream(30).getVideoTracks()];
+  if (hasMic && voiceDest) tracks.push(...voiceDest.stream.getAudioTracks());
+  const mime = pickMime(["video/mp4;codecs=avc1,mp4a", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]);
+  recorder = new MediaRecorder(new MediaStream(tracks), mime ? { mimeType: mime, videoBitsPerSecond: 5e6 } : {});
+  const parts = []; recorder.ondataavailable = e => e.data.size && parts.push(e.data);
+  recorder.onstop = () => {
+    clearInterval(recTimer); $("#recBadge").hidden = true; $("#shutter").classList.remove("recording");
+    $("#shutter").setAttribute("aria-label", "Start recording");
+    showResult(new Blob(parts, { type: recorder.mimeType || "video/webm" }), "video"); recorder = null;
+  };
+  recorder.start(250); recStart = Date.now();
+  $("#shutter").classList.add("recording"); $("#shutter").setAttribute("aria-label", "Stop recording"); $("#recBadge").hidden = false;
+  recTimer = setInterval(() => { const s = Math.floor((Date.now() - recStart) / 1000);
+    $("#recTime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (s >= 60) recorder?.stop(); }, 250);
+};
+
+function fileName(kind, blob) {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const ext = kind === "image" ? "jpg" : (blob.type.includes("mp4") ? "mp4" : "webm");
+  return `goofy-cam-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+}
+function showResult(blob, kind) {
+  lastBlob = blob; lastKind = kind;
+  const url = URL.createObjectURL(blob), media = $("#sheetMedia"); media.innerHTML = "";
+  const el = kind === "image" ? Object.assign(new Image(), { src: url, alt: "Your picture" })
+                              : Object.assign(document.createElement("video"), { src: url, controls: true, playsInline: true, loop: true, autoplay: true });
+  media.append(el); $("#sheet").hidden = false;
+  if (kind === "image") { $("#thumbImg").src = url; $("#thumb").hidden = false; }
+  $("#shareBtn").hidden = !(navigator.canShare && navigator.canShare({ files: [new File([blob], fileName(kind, blob), { type: blob.type })] }));
+}
+$("#thumb").onclick = () => lastBlob && showResult(lastBlob, lastKind);
+$("#closeBtn").onclick = () => { $("#sheet").hidden = true; $("#sheetMedia").innerHTML = ""; };
+$("#saveBtn").onclick = () => {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(lastBlob); a.download = fileName(lastKind, lastBlob);
+  document.body.append(a); a.click(); a.remove(); $("#sheetHint").textContent = "Saved to your Downloads folder.";
+};
+$("#shareBtn").onclick = async () => {
+  try { await navigator.share({ files: [new File([lastBlob], fileName(lastKind, lastBlob), { type: lastBlob.type })], title: "Goofy Cam" }); }
+  catch (e) { /* closed the share sheet */ }
+};
+
+/* ---------- misc ---------- */
+document.addEventListener("visibilitychange", () => { if (document.hidden && recorder) recorder.stop(); });
+previewFace($("#logoFace"), "googly");
+renderChips();
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
