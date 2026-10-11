@@ -230,66 +230,86 @@ function toScreen(result) {
   return out.sort((a, b) => a.c.x - b.c.x);
 }
 
-/* ---------- WebGL warps + face paint ----------
-   Every warp is a list of shapes the shader applies in order:
-   0 bulge/pinch, 1 drag, 2 swirl, 3 jelly wobble, 4 mirror.
-   Face paint is drawn on two flat layers (color tint, paint) that go through the same warp,
-   so the paint stays on the stretched face. */
+/* ---------- warps + face paint ----------
+   The picture is laid on a fine grid of triangles. Each warp moves the grid corners (never
+   folding them over each other), so the face stretches like rubber instead of smearing.
+   Face paint is drawn on a flat "tint" layer that keeps the skin's own light and shadow,
+   plus a "paint" layer for solid things (alien eyes, clown nose). Both ride the same grid. */
 const glc = document.createElement("canvas");
 const gl = glc.getContext("webgl", { premultipliedAlpha: false });
 const tintC = document.createElement("canvas"), tintX = tintC.getContext("2d");
 const paintC = document.createElement("canvas"), paintX = paintC.getContext("2d");
-const MAXW = 16;
-let prog, texV, texT, texP, U = {};
+const CELL = 14;
+let prog, texV, texT, texP, U = {}, bufSrc, bufDst, bufIdx, gridW = 0, gridH = 0, nIdx = 0, srcArr, dstArr;
 if (gl) {
-  const vs = `attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
-  const fs = `precision highp float;
-  uniform sampler2D tv,tt,tp;uniform vec2 res;uniform float mirror,time,useT,useP;uniform int n;uniform vec4 w[${MAXW}];uniform vec4 k[${MAXW}];
+  const vs = `attribute vec2 src;attribute vec2 dst;uniform vec2 res;varying vec2 uv;
+  void main(){uv=src/res;gl_Position=vec4(dst.x/res.x*2.-1.,1.-dst.y/res.y*2.,0.,1.);}`;
+  const fs = `precision highp float;varying vec2 uv;
+  uniform sampler2D tv,tt,tp;uniform vec2 res;uniform float mirror,useT,useP;uniform vec4 mf;uniform vec2 mfAx;
   float lum(vec3 c){return dot(c,vec3(.3,.59,.11));}
   vec3 clipC(vec3 c){float l=lum(c);float lo=min(min(c.r,c.g),c.b);float hi=max(max(c.r,c.g),c.b);
-    if(lo<0.)c=l+(c-l)*l/(l-lo);if(hi>1.)c=l+(c-l)*(1.-l)/(hi-l);return c;}
+    if(lo<0.)c=l+(c-l)*l/max(l-lo,1e-4);if(hi>1.)c=l+(c-l)*(1.-l)/max(hi-l,1e-4);return c;}
   vec3 setLum(vec3 c,float l){return clipC(c+(l-lum(c)));}
-  void main(){vec2 q=vec2(gl_FragCoord.x,res.y-gl_FragCoord.y);
-   for(int i=0;i<${MAXW};i++){if(i>=n)break;
-    vec2 c=w[i].xy;float r=w[i].z;int ty=int(w[i].w+.5);vec2 d=q-c;float dl=length(d);
-    if(dl<r){float t=dl/r;float s=(1.-t)*(1.-t);float sm=(1.-t*t)*(1.-t*t);
-     if(ty==0){q=c+d*(vec2(1.)-k[i].xy*s);}
-     else if(ty==1){q-=k[i].xy*sm;}
-     else if(ty==2){float a=k[i].x*s;float cs=cos(a),sn=sin(a);q=c+vec2(d.x*cs-d.y*sn,d.x*sn+d.y*cs);}
-     else if(ty==3){q+=vec2(sin(q.y*k[i].y+time*7.),cos(q.x*k[i].y+time*5.5))*k[i].x*sm;}
-     else if(ty==4){vec2 ax=k[i].xy;float side=dot(d,ax);if(side>0.)q=c+d-2.*side*ax;}
-    }}
-   vec2 uv=q/res;vec2 vuv=uv;if(mirror>.5)vuv.x=1.-vuv.x;
+  void main(){vec2 q=uv*res;
+   if(mf.w>.5){vec2 d=q-mf.xy;float s=dot(d,mfAx);vec2 dn=vec2(dot(d,mfAx),dot(d,vec2(-mfAx.y,mfAx.x)));
+     if(s>0.&&length(dn/vec2(mf.z*.62,mf.z))<1.)q-=2.*s*mfAx;}
+   vec2 st=q/res;vec2 vuv=uv*0.+st;if(mirror>.5)vuv.x=1.-vuv.x;
    vec3 col=texture2D(tv,vuv).rgb;
-   if(useT>.5){vec4 t=texture2D(tt,uv);col=mix(col,setLum(t.rgb,lum(col)),t.a);}
+   if(useT>.5){vec4 t=texture2D(tt,uv);col=mix(col,setLum(t.rgb,mix(lum(col),lum(t.rgb),.3)),t.a);}
    if(useP>.5){vec4 p=texture2D(tp,uv);col=mix(col,p.rgb,p.a);}
    gl_FragColor=vec4(col,1.);}`;
   const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o);
     if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) console.warn(gl.getShaderInfoLog(o)); return o; };
   prog = gl.createProgram();
   gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog); gl.useProgram(prog);
-  const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
-  const loc = gl.getAttribLocation(prog, "p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  bufSrc = gl.createBuffer(); bufDst = gl.createBuffer(); bufIdx = gl.createBuffer();
   const mk = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
     [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T].forEach(p => gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE));
     [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER].forEach(p => gl.texParameteri(gl.TEXTURE_2D, p, gl.LINEAR)); return t; };
   texV = mk(0); texT = mk(1); texP = mk(2);
-  for (const nm of ["tv", "tt", "tp", "res", "mirror", "time", "useT", "useP", "n", "w", "k"]) U[nm] = gl.getUniformLocation(prog, nm);
+  for (const nm of ["tv", "tt", "tp", "res", "mirror", "useT", "useP", "mf", "mfAx"]) U[nm] = gl.getUniformLocation(prog, nm);
+  U.src = gl.getAttribLocation(prog, "src"); U.dst = gl.getAttribLocation(prog, "dst");
   gl.uniform1i(U.tv, 0); gl.uniform1i(U.tt, 1); gl.uniform1i(U.tp, 2);
 }
 
-/* shape builders (screen pixels) */
-const bulge = (c, r, kx, ky = kx) => ({ c, r, t: 0, k: [kx, ky] });
-const drag  = (c, r, v) => ({ c, r, t: 1, k: [v.x, v.y] });
-const swirl = (c, r, a) => ({ c, r, t: 2, k: [a, 0] });
-const jelly = (c, r, amp, freq) => ({ c, r, t: 3, k: [amp, freq] });
-const mirrorAt = (c, r, ax) => ({ c, r, t: 4, k: [ax.x, ax.y] });
-// a direction in the face's own frame (x = toward screen-right eye, y = down the face), length in pixels
-const fdir = (f, lx, ly, len) => { const cs = Math.cos(f.ang), sn = Math.sin(f.ang); return { x: (lx * cs - ly * sn) * len, y: (lx * sn + ly * cs) * len }; };
-const along = (p, v, s = 1) => ({ x: p.x + v.x * s, y: p.y + v.y * s });
+function buildGrid() {
+  gridW = Math.ceil(W / CELL) + 1; gridH = Math.ceil(H / CELL) + 1;
+  srcArr = new Float32Array(gridW * gridH * 2); dstArr = new Float32Array(srcArr.length);
+  for (let j = 0; j < gridH; j++) for (let i = 0; i < gridW; i++) {
+    const o = (j * gridW + i) * 2; srcArr[o] = Math.min(i * CELL, W); srcArr[o + 1] = Math.min(j * CELL, H); }
+  const idx = new Uint16Array((gridW - 1) * (gridH - 1) * 6); let n = 0;
+  for (let j = 0; j < gridH - 1; j++) for (let i = 0; i < gridW - 1; i++) {
+    const a = j * gridW + i, b = a + 1, c = a + gridW, d = c + 1; idx.set([a, b, c, b, d, c], n); n += 6; }
+  nIdx = n;
+  if (gl) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, bufSrc); gl.bufferData(gl.ARRAY_BUFFER, srcArr, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufIdx); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+  }
+}
 
-/* face paint helpers */
+/* ---- move helpers, in the face's own units: eyes at x = -50 and +50, y points down the face ---- */
+const fall = u => u < 1 ? (1 - u * u) * (1 - u * u) : 0;
+const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function bulge(p, c, r, a, ay = a) { const dx = p.x - c.x, dy = p.y - c.y, k = fall(Math.hypot(dx, dy) / r);
+  return k ? { x: c.x + dx * (1 + a * k), y: c.y + dy * (1 + ay * k) } : p; }
+function push(p, c, r, vx, vy) { const k = fall(Math.hypot(p.x - c.x, p.y - c.y) / r); return k ? { x: p.x + vx * k, y: p.y + vy * k } : p; }
+function swirl(p, c, r, ang) { const dx = p.x - c.x, dy = p.y - c.y, a = ang * fall(Math.hypot(dx, dy) / r);
+  if (!a) return p; const cs = Math.cos(a), sn = Math.sin(a); return { x: c.x + dx * cs - dy * sn, y: c.y + dx * sn + dy * cs }; }
+const side = (x, hw) => 1 - sstep(hw * .95, hw * 2, Math.abs(x));
+function stretch(p, y0, y1, E, hw, narrow, cx = 0) {    // stretch the band from y0 toward y1 (up or down)
+  const span = y1 - y0, t = (p.y - y0) / span; if (t <= 0) return p;
+  const h = side(p.x - cx, hw); if (!h) return p; const tt = Math.min(t, 1);
+  return { x: cx + (p.x - cx) * (1 - narrow * tt * tt * h), y: p.y + E * span * tt * h };
+}
+function metrics(f) {
+  const L = f.L, mo = mid(L(13), L(14));
+  return { top: L(10).y, brow: (L(105).y + L(334).y) / 2, nose: L(1), noseTop: L(6), mouth: mo, chin: L(152).y,
+    hw: Math.abs(L(454).x - L(234).x) / 2, cheekA: L(50), cheekB: L(280), cA: L(61), cB: L(291),
+    bInA: L(107), bInB: L(336), bOutA: L(70), bOutB: L(300), eA: { x: -50, y: 0 }, eB: { x: 50, y: 0 },
+    mid: { x: 0, y: (L(10).y + L(152).y) / 2 }, H: L(152).y - L(10).y };
+}
+
+/* ---- face paint helpers (screen pixels) ---- */
 const LIPS_OUT = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185];
 const LIPS_IN = [78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191];
 const EYE_A = [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246];
@@ -300,94 +320,99 @@ function trace(ctx, f, idx, s = 1, about) {
   ctx.beginPath(); pts.forEach((p, j) => { const x = c.x + (p.x - c.x) * s, y = c.y + (p.y - c.y) * s; j ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
   ctx.closePath(); return c;
 }
-const ovalPath = (ctx, f, s = 1) => trace(ctx, f, OVAL, s, f.center);
-function soft(ctx, px, draw) { ctx.save(); ctx.filter = `blur(${Math.max(1, px)}px)`; draw(); ctx.restore(); }
-function glow(ctx, x, y, r, color, a) {
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, color.replace("A", a)); g.addColorStop(1, color.replace("A", 0));
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+function soft(ctx, px, fn) { ctx.save(); ctx.filter = `blur(${Math.max(1, px).toFixed(1)}px)`; fn(); ctx.restore(); }
+function spot(ctx, x, y, r, rgb, a, sy = 1, rot = 0) {     // soft round patch of color
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(1, sy);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+  g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(.55, `rgba(${rgb},${a * .7})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
 }
-function skin(ctx, f, color, alpha) {   // color tint over the whole face (keeps light and shadow)
-  soft(ctx, f.ed * .12, () => { ctx.globalAlpha = alpha; ovalPath(ctx, f, 1.02); ctx.fillStyle = color; ctx.fill(); });
+function skin(ctx, f, color, a) { soft(ctx, f.ed * .14, () => { ctx.globalAlpha = a; trace(ctx, f, OVAL, .97, f.center); ctx.fillStyle = color; ctx.fill(); }); }
+function lips(ctx, f, color, a, s = 1) {
+  soft(ctx, f.ed * .025, () => { ctx.globalAlpha = a; trace(ctx, f, LIPS_OUT, s, f.mouth); ctx.fillStyle = color; ctx.fill();
+    ctx.globalCompositeOperation = "destination-out"; ctx.globalAlpha = 1; trace(ctx, f, LIPS_IN, 1, f.mouth); ctx.fill(); });
 }
-function lipstick(ctx, f, color, s = 1, alpha = .85) {
-  ctx.save(); ctx.globalAlpha = alpha; const m = f.mouth;
-  trace(ctx, f, LIPS_OUT, s, m); ctx.fillStyle = color; ctx.fill();
-  ctx.globalCompositeOperation = "destination-out"; ctx.globalAlpha = 1; trace(ctx, f, LIPS_IN, 1, m); ctx.fill(); ctx.restore();
-}
+function eyeHoles(ctx, f, s) { ctx.save(); ctx.globalCompositeOperation = "destination-out";
+  soft(ctx, f.ed * .04, () => [EYE_A, EYE_B].forEach(idx => { trace(ctx, f, idx, s); ctx.fill(); })); ctx.restore(); }
 
 const WARPS = {
-  bugeyes: { label: "Bug Eyes", sym: "◉◉", shapes: f => [bulge(f.eL, f.ed * 1.1, .92), bulge(f.eR, f.ed * 1.1, .92), bulge(f.mouth, f.ed * .8, -.6)] },
-  bobble: { label: "Bobble Head", sym: "⬤", shapes: f => [
-    bulge(along(f.pts[152], fdir(f, 0, 1, f.faceH * .45)), f.faceH * .7, -.8),
-    bulge(along(f.center, fdir(f, 0, -1, f.faceH * .1)), f.faceH * 1.3, .78)] },
-  pinhead: { label: "Pinhead", sym: "•", shapes: f => [bulge(f.center, f.faceH * 1.5, -1.4)] },
-  conehead: { label: "Cone Head", sym: "▲", shapes: f => [
-    bulge(f.pts[10], f.faceH * .7, -.5, 0), drag(f.pts[10], f.faceH * .9, fdir(f, 0, -1, f.faceH * .75))] },
-  longchin: { label: "Long Chin", sym: "▼", shapes: f => [drag(f.pts[152], f.faceH * .8, fdir(f, 0, 1, f.faceH * .6)), bulge(f.pts[152], f.faceH * .5, -.3, 0)] },
-  squish: { label: "Squish", sym: "⬬", shapes: f => [bulge(f.center, f.faceH * 1.3, .8, -.75)] },
-  twisty: { label: "Twisty", sym: "@", shapes: f => [swirl(f.center, f.faceH * 1.0, 2.8)] },
-  jelly: { label: "Jelly Face", sym: "≈", shapes: f => [jelly(f.center, f.faceH * 1.3, f.ed * .2, .04)] },
-  mirror: { label: "Mirror Face", sym: "◧", shapes: f => [mirrorAt(f.pts[168], f.faceH * 1.7, fdir(f, 1, 0, 1))] },
-  megamouth: { label: "Mega Mouth", sym: "◡", shapes: f => [bulge(f.mouth, f.ed * 1.4, .9)],
-    paint: (c, f) => lipstick(c, f, "#E0102F", 1.05) },
-  puffy: { label: "Puffy Cheeks", sym: "◖◗", shapes: f => [bulge(f.pts[50], f.ed * .9, .8), bulge(f.pts[280], f.ed * .9, .8), bulge(f.mouth, f.ed * .6, -.5)],
-    paint: (c, f) => [50, 280].forEach(i => glow(c, f.pts[i].x, f.pts[i].y, f.ed * .55, "rgba(255,70,120,A)", .6)) },
-  pig: { label: "Pig", sym: "●●", shapes: f => [drag(f.nose, f.ed * .8, fdir(f, 0, -1, f.ed * .22)), bulge(f.nose, f.ed * .75, .7)],
-    tint: (c, f) => skin(c, f, "#FF7FA8", .55),
-    paint: (c, f) => {
-      const n = f.nose, s = f.ed;
-      c.save(); c.translate(n.x, n.y); c.rotate(f.ang);
-      c.beginPath(); c.ellipse(0, 0, s * .34, s * .25, 0, 0, Math.PI * 2); c.fillStyle = "#FF8FB4"; c.fill();
-      c.lineWidth = s * .04; c.strokeStyle = "#D9577F"; c.stroke();
-      [-1, 1].forEach(k => { c.beginPath(); c.ellipse(k * s * .12, 0, s * .055, s * .1, 0, 0, Math.PI * 2); c.fillStyle = "#5A1530"; c.fill(); });
-      c.restore();
-    } },
-  alien: { label: "Alien", sym: "◒", shapes: f => [
-    drag(f.pts[10], f.faceH * .8, fdir(f, 0, -1, f.faceH * .35)), bulge(f.pts[151], f.faceH * .75, .55),
-    bulge(f.mouth, f.ed * .9, -.75), bulge(f.pts[152], f.ed * 1.1, -.55)],
-    tint: (c, f) => skin(c, f, "#3CD070", .9),
-    paint: (c, f) => [EYE_A, EYE_B].forEach(idx => {
-      const ec = trace(c, f, idx, 1.9); c.fillStyle = "#06080A"; c.fill();
-      c.beginPath(); c.ellipse(ec.x - f.ed * .1, ec.y - f.ed * .08, f.ed * .09, f.ed * .05, f.ang - .5, 0, Math.PI * 2); c.fillStyle = "rgba(255,255,255,.85)"; c.fill();
-    }) },
-  zombie: { label: "Zombie", sym: "✕", shapes: f => [
-    bulge(f.pts[50], f.ed * .7, -.55), bulge(f.pts[280], f.ed * .7, -.55),
-    drag(f.pts[61], f.ed * .5, fdir(f, 0, 1, f.ed * .18)), drag(f.pts[291], f.ed * .5, fdir(f, 0, 1, f.ed * .18)),
-    bulge(f.eL, f.ed * .6, .35), bulge(f.eR, f.ed * .6, .35)],
-    tint: (c, f) => skin(c, f, "#7FA070", .85),
-    paint: (c, f) => {
-      [f.eL, f.eR].forEach(e => glow(c, e.x, e.y, f.ed * .62, "rgba(45,10,40,A)", .8));
-      [50, 280].forEach(i => glow(c, f.pts[i].x, f.pts[i].y + f.ed * .1, f.ed * .45, "rgba(40,30,25,A)", .45));
-      lipstick(c, f, "#3A1230", 1, .8);
-    } },
-  grumpy: { label: "Grumpy", sym: "︵", shapes: f => [
-    drag(f.pts[61], f.ed * .65, fdir(f, -.3, 1, f.ed * .32)), drag(f.pts[291], f.ed * .65, fdir(f, .3, 1, f.ed * .32)),
-    drag(f.pts[107], f.ed * .55, fdir(f, .4, 1, f.ed * .2)), drag(f.pts[336], f.ed * .55, fdir(f, -.4, 1, f.ed * .2))],
-    tint: (c, f) => skin(c, f, "#FF2A1A", .6),
-    paint: (c, f) => {
-      c.lineCap = "round"; c.lineWidth = f.ed * .14; c.strokeStyle = "rgba(45,25,15,.92)";
-      [[107, 70, -1], [336, 300, 1]].forEach(([a, b]) => { const p = f.pts[a], q = f.pts[b];
-        const v = fdir(f, 0, 1, f.ed * .06); c.beginPath(); c.moveTo(p.x + v.x, p.y + v.y); c.lineTo(q.x - v.x * 2, q.y - v.y * 2); c.stroke(); });
-    } },
-  clown: { label: "Clown Face", sym: "✿", shapes: f => [bulge(f.mouth, f.ed * 1.1, .5), bulge(f.nose, f.ed * .6, .5)],
-    paint: (c, f) => {
-      soft(c, f.ed * .08, () => { c.globalAlpha = .88; ovalPath(c, f, .97); c.fillStyle = "#FBF7F2"; c.fill(); });
-      c.save(); c.globalCompositeOperation = "destination-out";
-      [EYE_A, EYE_B].forEach(idx => { trace(c, f, idx, 1.25); c.fill(); }); c.restore();
-      lipstick(c, f, "#E8232F", 1.6, .95);
-      [f.eL, f.eR].forEach(e => [-1, 1].forEach(s => {
-        const o = along(e, fdir(f, 0, s, f.ed * .34)), a = fdir(f, 0, s, f.ed * .16), b = fdir(f, 1, 0, f.ed * .07);
-        c.beginPath(); c.moveTo(o.x - a.x, o.y - a.y); c.lineTo(o.x + b.x, o.y + b.y); c.lineTo(o.x + a.x, o.y + a.y); c.lineTo(o.x - b.x, o.y - b.y);
-        c.closePath(); c.fillStyle = "#2F6BFF"; c.fill(); }));
-      c.beginPath(); c.arc(f.nose.x, f.nose.y, f.ed * .26, 0, Math.PI * 2); c.fillStyle = "#E8232F"; c.fill();
-      c.beginPath(); c.arc(f.nose.x - f.ed * .08, f.nose.y - f.ed * .08, f.ed * .06, 0, Math.PI * 2); c.fillStyle = "#fff"; c.fill();
-    } },
+  bigeyes:   { label: "Big Eyes", sym: "◉◉", move: (p, m) => bulge(bulge(p, m.eA, 52, 1.05), m.eB, 52, 1.05) },
+  beady:     { label: "Beady Eyes", sym: "··", move: (p, m) => bulge(bulge(p, m.eA, 40, -.6), m.eB, 40, -.6) },
+  bigmouth:  { label: "Big Mouth", sym: "◡", move: (p, m) => bulge(p, m.mouth, 72, 1.05) },
+  bignose:   { label: "Big Nose", sym: "▲", move: (p, m) => bulge(p, { x: m.nose.x, y: m.nose.y - 8 }, 52, 1.15) },
+  bobble:    { label: "Bobble Head", sym: "⬤", move: (p, m) => bulge(p, m.mid, m.H * 1.05, .85) },
+  pinhead:   { label: "Pinhead", sym: "•", move: (p, m) => bulge(p, m.mid, m.H * 1.1, -.55) },
+  conehead:  { label: "Cone Head", sym: "▲", move: (p, m) => stretch(p, m.brow, m.top, 1.3, m.hw, .5) },
+  longchin:  { label: "Long Chin", sym: "▼", move: (p, m) => stretch(p, m.mouth.y + 6, m.chin, 1.25, m.hw, .3) },
+  wide:      { label: "Wide Face", sym: "⬬", move: (p, m) => bulge(p, m.mid, m.H * 1.1, .75, -.3) },
+  skinny:    { label: "Skinny Face", sym: "▮", move: (p, m) => bulge(p, m.mid, m.H * 1.1, -.4, .45) },
+  chipmunk:  { label: "Chipmunk", sym: "◖◗", move: (p, m) => bulge(bulge(bulge(p, m.cheekA, 58, .9), m.cheekB, 58, .9), m.mouth, 34, -.35) },
+  funhouse:  { label: "Funhouse", sym: "♦", move: (p, m) => bulge(bulge(p, { x: 0, y: m.brow }, m.H * .75, .7), { x: 0, y: m.chin - 25 }, m.H * .55, -.55) },
+  twisty:    { label: "Twisty", sym: "@", move: (p, m, t) => swirl(p, m.mid, m.H * .95, 2.4 * Math.sin(t * 1.6)) },
+  jelly:     { label: "Jelly Face", sym: "≈", move: (p, m, t) => { const k = fall(Math.hypot(p.x - m.mid.x, p.y - m.mid.y) / (m.H * .95));
+               return k ? { x: p.x + 13 * Math.sin(p.y * .05 + t * 7) * k, y: p.y + 9 * Math.cos(p.x * .05 + t * 5.5) * k } : p; } },
+  mirror:    { label: "Mirror Face", sym: "◧", move: p => p, mirrorFace: true },
+
+  lipstick:  { label: "Big Lips", sym: "♥", move: (p, m) => bulge(p, m.mouth, 66, .85),
+               tint: (c, f) => lips(c, f, "#C0102A", .8) },
+  blush:     { label: "Puffy Cheeks", sym: "◕", move: (p, m) => bulge(bulge(bulge(p, m.cheekA, 55, .8), m.cheekB, 55, .8), m.mouth, 34, -.35),
+               tint: (c, f) => [50, 280].forEach(i => spot(c, f.pts[i].x, f.pts[i].y, f.ed * .5, "235,80,110", .45)) },
+  pig:       { label: "Pig", sym: "●●", move: (p, m) => push(bulge(bulge(p, m.nose, 46, .75), { x: m.nose.x, y: m.nose.y + 8 }, 34, .5, 0), m.nose, 58, 0, -26),
+               tint: (c, f) => { skin(c, f, "#F2A0B4", .4); spot(c, f.nose.x, f.nose.y, f.ed * .4, "240,120,150", .45); } },
+  alien:     { label: "Alien", sym: "◒", move: (p, m) => bulge(bulge(stretch(bulge(bulge(p, m.eA, 50, .55), m.eB, 50, .55), m.brow, m.top, .5, m.hw, .15),
+                 m.mouth, 40, -.55), { x: 0, y: m.chin - 15 }, 70, -.45),
+               tint: (c, f) => skin(c, f, "#8CCB86", .55),
+               paint: (c, f) => soft(c, f.ed * .03, () => [EYE_A, EYE_B].forEach(idx => {
+                 const ec = trace(c, f, idx, 1.7); const g = c.createLinearGradient(ec.x, ec.y - f.ed * .2, ec.x, ec.y + f.ed * .2);
+                 g.addColorStop(0, "rgba(28,34,40,.95)"); g.addColorStop(1, "rgba(6,8,10,.95)"); c.fillStyle = g; c.fill();
+                 spot(c, ec.x - f.ed * .07, ec.y - f.ed * .06, f.ed * .07, "255,255,255", .5); })) },
+  zombie:    { label: "Zombie", sym: "✕", move: (p, m) => {
+                 p = bulge(bulge(p, m.cheekA, 46, -.4), m.cheekB, 46, -.4);
+                 p = push(push(p, m.cA, 30, 0, 10), m.cB, 30, 0, 10);
+                 return bulge(bulge(p, m.eA, 38, .2), m.eB, 38, .2); },
+               tint: (c, f) => { skin(c, f, "#9AAA8C", .6);
+                 [f.eL, f.eR].forEach(e => spot(c, e.x, e.y + f.ed * .04, f.ed * .42, "50,30,55", .6, .8, f.ang));
+                 [50, 280].forEach(i => spot(c, f.pts[i].x, f.pts[i].y + f.ed * .08, f.ed * .38, "60,64,52", .35));
+                 lips(c, f, "#4A3040", .55); } },
+  angry:     { label: "Angry", sym: "︶", move: (p, m) => {
+                 p = push(p, m.bInA, 30, -Math.sign(m.bInA.x) * 7, 11); p = push(p, m.bInB, 30, -Math.sign(m.bInB.x) * 7, 11);
+                 p = push(p, m.bOutA, 30, 0, -5); p = push(p, m.bOutB, 30, 0, -5);
+                 p = push(p, m.cA, 28, 0, 12); p = push(p, m.cB, 28, 0, 12);
+                 return bulge(p, { x: m.nose.x, y: m.nose.y + 6 }, 32, .35, 0); },
+               tint: (c, f) => { skin(c, f, "#D9583F", .32); spot(c, f.pts[9].x, f.pts[9].y, f.ed * .6, "200,50,40", .3); } },
+  clown:     { label: "Clown", sym: "✿", move: (p, m) => bulge(bulge(p, m.mouth, 55, .35), m.nose, 30, .45),
+               tint: (c, f) => { skin(c, f, "#FFFFFF", .72); eyeHoles(c, f, 1.5);
+                 lips(c, f, "#C8101E", .85, 1.45);
+                 soft(c, f.ed * .015, () => [f.eL, f.eR].forEach(e => [-1, 1].forEach(s => {
+                   const o = { x: e.x - Math.sin(f.ang) * s * f.ed * .32, y: e.y + Math.cos(f.ang) * s * f.ed * .32 };
+                   c.save(); c.translate(o.x, o.y); c.rotate(f.ang); c.beginPath();
+                   c.moveTo(0, -f.ed * .14); c.lineTo(f.ed * .06, 0); c.lineTo(0, f.ed * .14); c.lineTo(-f.ed * .06, 0); c.closePath();
+                   c.fillStyle = "rgba(40,80,200,.7)"; c.fill(); c.restore(); }))); },
+               paint: (c, f) => { const n = f.nose, r = f.ed * .2; const g = c.createRadialGradient(n.x - r * .35, n.y - r * .4, r * .1, n.x, n.y, r);
+                 g.addColorStop(0, "#FF8A8A"); g.addColorStop(.35, "#E01818"); g.addColorStop(1, "#8E0A0A");
+                 c.fillStyle = g; c.beginPath(); c.arc(n.x, n.y, r, 0, Math.PI * 2); c.fill(); } },
 };
+
+function moveGrid(id, faceList, t) {
+  dstArr.set(srcArr);
+  const look = WARPS[id];
+  for (const f of faceList) {
+    const m = metrics(f), s = f.ed / 100, cs = Math.cos(f.ang), sn = Math.sin(f.ang), reach = (m.H * 2.6) * s;
+    for (let o = 0; o < dstArr.length; o += 2) {
+      const dx = dstArr[o] - f.c.x, dy = dstArr[o + 1] - f.c.y;
+      if (Math.abs(dx) > reach || Math.abs(dy) > reach * 1.4) continue;
+      const p = { x: (dx * cs + dy * sn) / s, y: (-dx * sn + dy * cs) / s };
+      const q = look.move(p, m, t); if (q === p) continue;
+      dstArr[o] = f.c.x + (q.x * cs - q.y * sn) * s; dstArr[o + 1] = f.c.y + (q.x * sn + q.y * cs) * s;
+    }
+  }
+}
 
 function renderLook(id, faceList) {
   const look = WARPS[id];
   if (glc.width !== W || glc.height !== H) { glc.width = W; glc.height = H; gl.viewport(0, 0, W, H); }
-  const list = faceList.flatMap(f => look.shapes(f)).slice(0, MAXW);
+  if (gridW !== Math.ceil(W / CELL) + 1 || gridH !== Math.ceil(H / CELL) + 1) buildGrid();
+  moveGrid(id, faceList, performance.now() / 1000);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texV);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
   for (const [fn, cv, cx, tx, unit, u] of [[look.tint, tintC, tintX, texT, 1, U.useT], [look.paint, paintC, paintX, texP, 2, U.useP]]) {
@@ -398,11 +423,16 @@ function renderLook(id, faceList) {
     gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tx);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv); gl.uniform1f(u, 1);
   }
-  const ws = new Float32Array(MAXW * 4), ks = new Float32Array(MAXW * 4);
-  list.forEach((o, i) => { ws.set([o.c.x, o.c.y, o.r, o.t], i * 4); ks.set([o.k[0], o.k[1], 0, 0], i * 4); });
-  gl.uniform2f(U.res, W, H); gl.uniform1f(U.mirror, mirror ? 1 : 0); gl.uniform1f(U.time, performance.now() / 1000);
-  gl.uniform1i(U.n, list.length); gl.uniform4fv(U.w, ws); gl.uniform4fv(U.k, ks);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const f0 = faceList[0];
+  if (look.mirrorFace && f0) { gl.uniform4f(U.mf, f0.pts[168].x, f0.pts[168].y, f0.faceH * 1.15, 1); gl.uniform2f(U.mfAx, Math.cos(f0.ang), Math.sin(f0.ang)); }
+  else gl.uniform4f(U.mf, 0, 0, 0, 0);
+  gl.uniform2f(U.res, W, H); gl.uniform1f(U.mirror, mirror ? 1 : 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufSrc); gl.enableVertexAttribArray(U.src); gl.vertexAttribPointer(U.src, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bufDst); gl.bufferData(gl.ARRAY_BUFFER, dstArr, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(U.dst); gl.vertexAttribPointer(U.dst, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, bufIdx);
+  gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawElements(gl.TRIANGLES, nIdx, gl.UNSIGNED_SHORT, 0);
 }
 
 /* ---------- stickers (drawn in a face frame: eyes at (-50,0) and (50,0)) ---------- */
